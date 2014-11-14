@@ -49,50 +49,58 @@ angular.module('gettext').factory('gettextCatalog', ["gettextPlurals", "$http", 
             broadcastUpdated();
         },
 
-        setStrings: function (language, strings) {
+        setStrings: function (language, strings, domain) {
+            domain = domain || 'default';
+
             if (!this.strings[language]) {
                 this.strings[language] = {};
+            }
+
+            if (!this.strings[language][domain]) {
+                this.strings[language][domain] = {};
             }
 
             for (var key in strings) {
                 var val = strings[key];
                 if (typeof val === 'string') {
-                    this.strings[language][key] = [val];
+                    this.strings[language][domain][key] = [val];
                 } else {
-                    this.strings[language][key] = val;
+                    this.strings[language][domain][key] = val;
                 }
             }
 
             broadcastUpdated();
         },
 
-        getStringForm: function (string, n) {
-            var stringTable = this.strings[this.currentLanguage] || {};
+        getStringForm: function (string, n, domain) {
+            var stringTable = this.strings[this.currentLanguage] && this.strings[this.currentLanguage][domain] || {};
             var plurals = stringTable[string] || [];
             return plurals[n];
         },
 
-        getString: function (string, context) {
-            string = this.getStringForm(string, 0) || prefixDebug(string);
+        getString: function (string, context, domain) {
+            domain = domain || 'default';
+            string = this.getStringForm(string, 0, domain) || prefixDebug(string);
             string = context ? $interpolate(string)(context) : string;
             return addTranslatedMarkers(string);
         },
 
-        getPlural: function (n, string, stringPlural, context) {
+        getPlural: function (n, string, stringPlural, context, domain) {
             var form = gettextPlurals(this.currentLanguage, n);
-            string = this.getStringForm(string, form) || prefixDebug(n === 1 ? string : stringPlural);
+            domain = domain || 'default';
+            string = this.getStringForm(string, form, domain) || prefixDebug(n === 1 ? string : stringPlural);
             string = context ? $interpolate(string)(context) : string;
             return addTranslatedMarkers(string);
         },
 
-        loadRemote: function (url) {
+        loadRemote: function (url, domain) {
             return $http({
                 method: 'GET',
                 url: url,
                 cache: catalog.cache
             }).success(function (data) {
                 for (var lang in data) {
-                    catalog.setStrings(lang, data[lang]);
+                    catalog.setStrings(lang, data[lang], domain);
                 }
             });
         }
@@ -131,6 +139,7 @@ angular.module('gettext').directive('translate', ["gettextCatalog", "$parse", "$
 
             var msgid = trim(element.html());
             var translatePlural = attrs.translatePlural;
+            var translateDomain = attrs.translate || attrs.translateDomain;
 
             return {
                 post: function (scope, element, attrs) {
@@ -143,9 +152,9 @@ angular.module('gettext').directive('translate', ["gettextCatalog", "$parse", "$
                         if (translatePlural) {
                             scope = pluralScope || (pluralScope = scope.$new());
                             scope.$count = countFn(scope);
-                            translated = gettextCatalog.getPlural(scope.$count, msgid, translatePlural);
+                            translated = gettextCatalog.getPlural(scope.$count, msgid, translatePlural, null, translateDomain);
                         } else {
-                            translated = gettextCatalog.getString(msgid);
+                            translated = gettextCatalog.getString(msgid, null, translateDomain);
                         }
 
                         // Swap in the translation
