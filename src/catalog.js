@@ -3,7 +3,15 @@ angular.module('gettext').factory('gettextCatalog', function (gettextPlurals, $h
 
     var prefixDebug = function (string) {
         if (catalog.debug && catalog.currentLanguage !== catalog.baseLanguage) {
-            return '[MISSING]: ' + string;
+            return catalog.debugPrefix + string;
+        } else {
+            return string;
+        }
+    };
+
+    var addTranslatedMarkers = function (string) {
+        if (catalog.showTranslatedMarkers) {
+            return catalog.translatedMarkerPrefix + string + catalog.translatedMarkerSuffix;
         } else {
             return string;
         }
@@ -15,6 +23,10 @@ angular.module('gettext').factory('gettextCatalog', function (gettextPlurals, $h
 
     catalog = {
         debug: false,
+        debugPrefix: '[MISSING]: ',
+        showTranslatedMarkers: false,
+        translatedMarkerPrefix: '[',
+        translatedMarkerSuffix: ']',
         strings: {},
         baseLanguage: 'en',
         currentLanguage: 'en',
@@ -57,14 +69,16 @@ angular.module('gettext').factory('gettextCatalog', function (gettextPlurals, $h
         getString: function (string, context, domain) {
             domain = domain || 'default';
             string = this.getStringForm(string, 0, domain) || prefixDebug(string);
-            return context ? $interpolate(string)(context) : string;
+            string = context ? $interpolate(string)(context) : string;
+            return addTranslatedMarkers(string);
         },
 
         getPlural: function (n, string, stringPlural, context, domain) {
             var form = gettextPlurals(this.currentLanguage, n);
             domain = domain || 'default';
             string = this.getStringForm(string, form, domain) || prefixDebug(n === 1 ? string : stringPlural);
-            return context ? $interpolate(string)(context) : string;
+            string = context ? $interpolate(string)(context) : string;
+            return addTranslatedMarkers(string);
         },
 
         loadRemote: function (url, domain) {

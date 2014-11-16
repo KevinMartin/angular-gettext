@@ -15,7 +15,15 @@ angular.module('gettext').factory('gettextCatalog', ["gettextPlurals", "$http", 
 
     var prefixDebug = function (string) {
         if (catalog.debug && catalog.currentLanguage !== catalog.baseLanguage) {
-            return '[MISSING]: ' + string;
+            return catalog.debugPrefix + string;
+        } else {
+            return string;
+        }
+    };
+
+    var addTranslatedMarkers = function (string) {
+        if (catalog.showTranslatedMarkers) {
+            return catalog.translatedMarkerPrefix + string + catalog.translatedMarkerSuffix;
         } else {
             return string;
         }
@@ -27,6 +35,10 @@ angular.module('gettext').factory('gettextCatalog', ["gettextPlurals", "$http", 
 
     catalog = {
         debug: false,
+        debugPrefix: '[MISSING]: ',
+        showTranslatedMarkers: false,
+        translatedMarkerPrefix: '[',
+        translatedMarkerSuffix: ']',
         strings: {},
         baseLanguage: 'en',
         currentLanguage: 'en',
@@ -37,54 +49,137 @@ angular.module('gettext').factory('gettextCatalog', ["gettextPlurals", "$http", 
             broadcastUpdated();
         },
 
-        setStrings: function (language, strings) {
+        setStrings: function (language, strings, domain) {
+            domain = domain || 'default';
+
             if (!this.strings[language]) {
                 this.strings[language] = {};
+            }
+
+            if (!this.strings[language][domain]) {
+                this.strings[language][domain] = {};
             }
 
             for (var key in strings) {
                 var val = strings[key];
                 if (typeof val === 'string') {
-                    this.strings[language][key] = [val];
+                    this.strings[language][domain][key] = [val];
                 } else {
-                    this.strings[language][key] = val;
+                    this.strings[language][domain][key] = val;
                 }
             }
 
             broadcastUpdated();
         },
 
-        getStringForm: function (string, n) {
-            var stringTable = this.strings[this.currentLanguage] || {};
+        getStringForm: function (string, n, domain) {
+            var stringTable = this.strings[this.currentLanguage] && this.strings[this.currentLanguage][domain] || {};
             var plurals = stringTable[string] || [];
             return plurals[n];
         },
 
-        getString: function (string, context) {
-            string = this.getStringForm(string, 0) || prefixDebug(string);
-            return context ? $interpolate(string)(context) : string;
+        getString: function (string, context, domain) {
+            domain = domain || 'default';
+            string = this.getStringForm(string, 0, domain) || prefixDebug(string);
+            string = context ? $interpolate(string)(context) : string;
+            return addTranslatedMarkers(string);
         },
 
-        getPlural: function (n, string, stringPlural, context) {
+        getPlural: function (n, string, stringPlural, context, domain) {
             var form = gettextPlurals(this.currentLanguage, n);
-            string = this.getStringForm(string, form) || prefixDebug(n === 1 ? string : stringPlural);
-            return context ? $interpolate(string)(context) : string;
+            domain = domain || 'default';
+            string = this.getStringForm(string, form, domain) || prefixDebug(n === 1 ? string : stringPlural);
+            string = context ? $interpolate(string)(context) : string;
+            return addTranslatedMarkers(string);
         },
 
-        loadRemote: function (url) {
+        loadRemote: function (url, domain) {
             return $http({
                 method: 'GET',
                 url: url,
                 cache: catalog.cache
             }).success(function (data) {
                 for (var lang in data) {
-                    catalog.setStrings(lang, data[lang]);
+                    catalog.setStrings(lang, data[lang], domain);
                 }
             });
         }
     };
 
     return catalog;
+}]);
+
+angular.module('gettext').directive('translateDynamic', ["gettextCatalog", "$parse", "$animate", "$compile", "$interpolate", function (gettextCatalog, $parse, $animate, $compile, $interpolate) {
+    // Trim polyfill for old browsers (instead of jQuery)
+    // Based on AngularJS-v1.2.2 (angular.js#620)
+    var trim = (function () {
+        if (!String.prototype.trim) {
+            return function (value) {
+                return (typeof value === 'string') ? value.replace(/^\s*/, '').replace(/\s*$/, '') : value;
+            };
+        }
+        return function (value) {
+            return (typeof value === 'string') ? value.trim() : value;
+        };
+    })();
+
+    function assert(condition, missing, found) {
+        if (!condition) {
+            throw new Error('You should add a ' + missing + ' attribute whenever you add a ' + found + ' attribute.');
+        }
+    }
+
+    return {
+        restrict: 'A',
+        terminal: true,
+        compile: function compile(element, attrs) {
+            // Validate attributes
+            assert(!attrs.translatePlural || attrs.translateN, 'translate-n', 'translate-plural');
+            assert(!attrs.translateN || attrs.translatePlural, 'translate-plural', 'translate-n');
+
+            var msgidString = trim(element.html());
+            var translatePlural = attrs.translatePlural;
+            var translateDomainString = attrs.translateDynamic || attrs.translateDomain;
+
+            return {
+                post: function (scope, element, attrs) {
+                    var countFn = $parse(attrs.translateN);
+                    var pluralScope = null;
+                    var msgid = $interpolate(msgidString)(scope);
+                    var translateDomain = $interpolate(translateDomainString)(scope);
+
+                    function update() {
+                        // Fetch correct translated string.
+                        var translated;
+
+                        if (translatePlural) {
+                            scope = pluralScope || (pluralScope = scope.$new());
+                            scope.$count = countFn(scope);
+                            translated = gettextCatalog.getPlural(scope.$count, msgid, translatePlural, null, translateDomain);
+                        } else {
+                            translated = gettextCatalog.getString(msgid, null, translateDomain);
+                        }
+
+                        // Swap in the translation
+                        var newWrapper = angular.element('<span>' + translated + '</span>');
+                        $compile(newWrapper.contents())(scope);
+                        var oldContents = element.contents();
+                        var newContents = newWrapper.contents();
+                        $animate.enter(newContents, element);
+                        $animate.leave(oldContents);
+                    }
+
+                    if (attrs.translateN) {
+                        scope.$watch(attrs.translateN, update);
+                    }
+
+                    scope.$on('gettextLanguageChanged', update);
+
+                    update();
+                }
+            };
+        }
+    };
 }]);
 
 angular.module('gettext').directive('translate', ["gettextCatalog", "$parse", "$animate", "$compile", function (gettextCatalog, $parse, $animate, $compile) {
@@ -117,6 +212,7 @@ angular.module('gettext').directive('translate', ["gettextCatalog", "$parse", "$
 
             var msgid = trim(element.html());
             var translatePlural = attrs.translatePlural;
+            var translateDomain = attrs.translate || attrs.translateDomain;
 
             return {
                 post: function (scope, element, attrs) {
@@ -129,9 +225,9 @@ angular.module('gettext').directive('translate', ["gettextCatalog", "$parse", "$
                         if (translatePlural) {
                             scope = pluralScope || (pluralScope = scope.$new());
                             scope.$count = countFn(scope);
-                            translated = gettextCatalog.getPlural(scope.$count, msgid, translatePlural);
+                            translated = gettextCatalog.getPlural(scope.$count, msgid, translatePlural, null, translateDomain);
                         } else {
-                            translated = gettextCatalog.getString(msgid);
+                            translated = gettextCatalog.getString(msgid, null, translateDomain);
                         }
 
                         // Swap in the translation
@@ -156,6 +252,13 @@ angular.module('gettext').directive('translate', ["gettextCatalog", "$parse", "$
     };
 }]);
 
+angular.module('gettext').filter('translateDomain', ["gettextCatalog", function (gettextCatalog) {
+    function filter(input, domain) {
+        return gettextCatalog.getString(input, null, domain);
+    }
+    filter.$stateful = true;
+    return filter;
+}]);
 angular.module('gettext').filter('translate', ["gettextCatalog", function (gettextCatalog) {
     function filter(input) {
         return gettextCatalog.getString(input);
@@ -163,7 +266,6 @@ angular.module('gettext').filter('translate', ["gettextCatalog", function (gette
     filter.$stateful = true;
     return filter;
 }]);
-
 // Do not edit this file, it is autogenerated using genplurals.py!
 angular.module("gettext").factory("gettextPlurals", function () {
     return function (langCode, n) {
